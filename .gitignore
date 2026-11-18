@@ -1,0 +1,19 @@
+# Python / outils
+__pycache__/
+*.pyc
+.venv/
+
+# Reglages personnels et donnees de la carte (jamais sur GitHub)
+config_local.py
+settings.json
+images/
+frames/
+*.raw
+*.part
+
+# Fichiers generes par tools/qr_wifi.py (contiennent ton mot de passe Wi-Fi)
+qr_wifi_*.png
+
+# Divers
+.DS_Store
+Thumbs.db
