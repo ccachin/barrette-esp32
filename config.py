@@ -27,6 +27,13 @@ WIFI_AUTO_OFF = 120     # le Wi-Fi s'eteint 120 s apres le dernier telephone con
 WIFI_TXPOWER = 8        # puissance d'emission Wi-Fi en dBm (8 suffit pour un telephone a 1-2 m ;
                         # moins = moins de chaleur et de consommation ; 0/None = reglage par defaut)
 
+# --- Batterie et veille ------------------------------------------------------------
+# Appui sur BOOT : court = scene suivante ; 1,5 s puis relache = Wi-Fi on/off ; maintenu 4 s = VEILLE PROFONDE (un appui sur BOOT reveille).
+BATTERY_ICON = False    # petite icone sur toutes les scenes : "auto" (4 s apres un appui + si < 20 %), True (toujours) ou False (jamais)
+                        # Le niveau s'affiche en grand avec la scene Battery() de la PLAYLIST.
+BAT_CAL = 1.0           # compare avec un multimetre : BAT_CAL = tension_mesuree / tension_affichee (voir test_batterie.py)
+BAT_CUTOFF = 3.30       # en dessous de cette tension : veille profonde automatique (protege la batterie) ; 0 = desactive
+
 # --- Reglages par defaut (modifiables ensuite depuis le telephone) ---------
 MESSAGE = "Bonjour !"
 BRIGHTNESS = 60         # 0-100
@@ -61,6 +68,7 @@ PLAYLIST = [
     Plasma(duration=8),
     Stars(duration=8),
     Matrix(duration=8),
+    Battery(duration=6),                        # niveau de batterie en grand
     # Anim("frames/mon_anim", fps=12, loops=3), # images converties avec tools/gif2raw.py
 ]
 

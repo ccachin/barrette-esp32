@@ -454,3 +454,64 @@ class Gallery(Scene):
                 f.readinto(d.buf)
             d.show_raw(d.buf)
         return False
+
+
+# ---------------------------------------------------------------------------
+class Battery(Scene):
+    """Ecran batterie en grand : pourcentage geant, grosse pile a segments, tension. Rien d'envoye par le web."""
+    title = "Batterie"
+    CELLS = 10
+
+    def __init__(self, duration=6):
+        super().__init__(duration)
+
+    def _measure(self):
+        import power
+        import config
+        self.v = power.voltage(getattr(config, "BAT_CAL", 1.0))
+        self.pct = power.percent(self.v)
+        txt = "%d%%" % self.pct
+        col = rgb(0, 230, 90) if self.pct > 30 else (rgb(255, 150, 0) if self.pct > 15 else rgb(255, 30, 30))
+        self.col = col
+        self.fb, self.buf, self.tw, self.th = render_text(txt, col, self.sc)
+
+    def start(self, d, S):
+        self.sc = max(1, min(6, (d.width - 20) // (8 * 4), (d.height // 3) // 8))
+        self.tm = 0
+        self._measure()
+
+    def frame(self, d, S, t):
+        if t - self.tm > 3000:                           # nouvelle mesure toutes les 3 s
+            self.tm = t
+            self._measure()
+        W, H = d.width, d.height
+        d.fill(0)
+        # pourcentage geant en haut
+        d.blit(self.fb, (W - self.tw) // 2, 8, 0)
+        # pile a segments
+        bw = min(W - 36, 250)
+        bh = max(24, H - self.th - 52)
+        bx = (W - bw - 8) // 2
+        by = 8 + self.th + 10
+        low = self.pct <= 15 and (t // 500) % 2 == 0     # contour qui clignote quand c'est presque vide
+        d.rect(bx, by, bw, bh, RED if low else WHITE)
+        d.rect(bx + 1, by + 1, bw - 2, bh - 2, RED if low else WHITE)
+        d.fill_rect(bx + bw, by + bh // 3, 8, bh // 3, WHITE)
+        n = self.CELLS
+        gap = 3
+        cw = (bw - 8 - gap * (n - 1)) // n
+        lit = (self.pct * n + 99) // 100 if self.pct > 0 else 0   # segment entame = allume
+        for i in range(n):
+            x = bx + 4 + i * (cw + gap)
+            if i < lit:
+                k = 256 if i < lit - 1 else 150 + (SIN[(t // 4) & 255] + 127) * 106 // 254   # dernier segment : respire
+                d.fill_rect(x, by + 4, cw, bh - 8, _mix(self._rgb(), k))
+            else:
+                d.fill_rect(x, by + 4, cw, bh - 8, rgb(30, 30, 30))
+        # tension
+        d.text("%.2f V" % self.v, (W - 8 * 6) // 2, H - 14, rgb(170, 170, 170))
+        return False
+
+    def _rgb(self):
+        p = self.pct
+        return (0, 230, 90) if p > 30 else ((255, 150, 0) if p > 15 else (255, 30, 30))

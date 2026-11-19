@@ -13,8 +13,9 @@ freq(getattr(config, "CPU_MHZ", 160) * 1_000_000)      # AVANT le reste : moins 
 from display import Display
 from led import Led, led_mode, OVERRIDES, LED_CHOICES
 from scenes_fx import Gallery
-from gfx import WHITE
+from gfx import WHITE, BLACK, GREEN, ORANGE, RED
 import qr
+import power
 
 FRAME_MS = getattr(config, "FRAME_MS", 40)               # 40 ms = 25 images/s max
 WIFI_AUTO_OFF = getattr(config, "WIFI_AUTO_OFF", 120)    # secondes ; 0 = Wi-Fi toujours allume
@@ -82,6 +83,49 @@ def splash(lines):
 
 wifi = {"on": False, "srv": False, "t0": 0, "chk": 0}
 
+# --- Batterie -----------------------------------------------------------------
+BAT_CAL = getattr(config, "BAT_CAL", 1.0)              # a regler avec un multimetre (voir config.py)
+BAT_CUTOFF = getattr(config, "BAT_CUTOFF", 3.30)       # en dessous : veille profonde pour proteger la batterie (0 = jamais)
+BATTERY_ICON = getattr(config, "BATTERY_ICON", False)  # petite icone sur toutes les scenes (non par defaut : voir la scene Battery)
+bat = {"v": 0.0, "pct": 100, "t": -100000, "show": 0}
+
+
+def bat_update(now, force=False):
+    if force or ticks_diff(now, bat["t"]) > 20000:
+        bat["t"] = now
+        try:
+            bat["v"] = power.voltage(BAT_CAL)
+            bat["pct"] = power.percent(bat["v"])
+        except Exception as e:
+            print("batterie :", e)
+
+
+def draw_battery(x, y):
+    """Petite icone de batterie 22 x 10 (rien a envoyer a l'ecran : le fond est redessine par la scene)."""
+    pct = bat["pct"]
+    col = GREEN if pct > 30 else (ORANGE if pct > 15 else RED)
+    d.fill_rect(x - 2, y - 2, 28, 14, BLACK)
+    d.rect(x, y, 22, 10, WHITE)
+    d.fill_rect(x + 22, y + 3, 2, 4, WHITE)
+    d.fill_rect(x + 2, y + 2, max(1, 18 * pct // 100), 6, col)
+
+
+async def go_sleep(reason="Veille"):
+    """Veille profonde : l'ecran et la LED s'eteignent, un appui sur BOOT reveille la barrette (elle redemarre)."""
+    if config.WEB and wifi["on"]:
+        wifi_off()
+    bat_update(ticks_ms(), True)
+    d.fill(0)
+    d.text(reason, 8, 20, WHITE)
+    d.text("Batterie : %d %% (%.2f V)" % (bat["pct"], bat["v"]), 8, 40, WHITE)
+    d.text("BOOT = reveil", 8, 60, WHITE)
+    d.show()
+    await asyncio.sleep(2)
+    while button.value() == 0:                       # il faut relacher BOOT, sinon on se reveille aussitot
+        await asyncio.sleep_ms(50)
+    await asyncio.sleep_ms(300)
+    power.deep_sleep(d, led)
+
 
 def random_password():
     return "%08d" % (int.from_bytes(os.urandom(4), "big") % 100000000)
@@ -117,7 +161,7 @@ def show_connect(ip, pwd):
     else:
         tx, ty, cols = 4, side + 10, d.width // 8
     lines = ["Wi-Fi :", ssid, "", "Scanne le QR", "pour te connecter", "",
-             "ou ouvre :", "http://" + ip]
+             "ou ouvre :", "http://" + ip, "", "Batterie %d %%" % bat["pct"]]
     if getattr(config, "SHOW_PASSWORD", False):
         lines += ["", "Mdp : " + pwd]
     if not pwd or len(pwd) < 8:
@@ -198,7 +242,7 @@ async def player():
     i = 0
     was_down = False
     press_t = 0
-    long_done = False
+    hint = False
     while True:
         sel = S["scene"]
         if 0 <= sel < len(PLAYLIST):
@@ -219,6 +263,8 @@ async def player():
             t = ticks_diff(f0, t0)
             done = sc.frame(d, S, t)
             if not sc.direct:
+                if BATTERY_ICON is True or (BATTERY_ICON and (ticks_diff(bat["show"], f0) > 0 or bat["pct"] < 20)):
+                    draw_battery(d.width - 28, 4)
                 d.show()
             if led:
                 led.update(t, led_mode(sc, S["led"]))
@@ -233,32 +279,53 @@ async def player():
                 elif ticks_diff(f0, wifi["t0"]) > WIFI_AUTO_OFF * 1000:
                     wifi_off()
 
-            # Bouton BOOT
+            # Batterie : mesure toutes les 20 s, protection si elle est vide
+            bat_update(f0)
+            if BAT_CUTOFF and bat["v"] > 1.0 and bat["v"] < BAT_CUTOFF and ticks_diff(f0, S["up"]) > 5000:
+                await go_sleep("Batterie vide")
+
+            # Bouton BOOT : court = scene suivante ; 1,5-4 s (relache) = Wi-Fi on/off ; 4 s maintenu = veille
             down = button.value() == 0
             if down and not was_down:
-                press_t, long_done = f0, False
-            if down and not long_done and ticks_diff(f0, press_t) > 1500 and config.WEB:
-                long_done = True                            # appui long : Wi-Fi on / off
-                if wifi["on"]:
-                    wifi_off()
-                    splash(["Wi-Fi eteint"])
-                    await asyncio.sleep(1)
-                else:
-                    await wifi_on()
-                was_down = down
-                break
-            if was_down and not down and not long_done:     # appui court : scene suivante
-                if S["scene"] >= 0:
+                press_t = f0
+            held = ticks_diff(f0, press_t) if down else 0
+            if down and held > 1500:
+                if not hint:
+                    hint = True
+                    d.fill_rect(0, d.height - 38, d.width, 38, BLACK)
+                    d.text("Relache : Wi-Fi", 8, d.height - 34, WHITE)
+                    d.text("Garde : veille", 8, d.height - 22, WHITE)
+                    d.show()
+                if held > 4000:
+                    await go_sleep()
+                was_down = True
+                await asyncio.sleep_ms(50)
+                continue
+            if was_down and not down:
+                was_down = hint = False
+                bat["show"] = f0 + 4000
+                if ticks_diff(f0, press_t) > 1500:              # appui long relache : Wi-Fi on / off
+                    if config.WEB:
+                        if wifi["on"]:
+                            wifi_off()
+                            splash(["Wi-Fi eteint"])
+                            await asyncio.sleep(1)
+                        else:
+                            await wifi_on()
+                elif S["scene"] >= 0:                           # appui court : scene suivante
                     S["scene"] = (S["scene"] + 1) % len(PLAYLIST)
-                was_down = down
                 break
             was_down = down
             await asyncio.sleep_ms(max(1, FRAME_MS - ticks_diff(ticks_ms(), f0)))
 
 
 async def main():
-    if config.WEB and getattr(config, "WIFI_AT_BOOT", True):
-        await wifi_on()
+    bat_update(ticks_ms(), True)
+    bat["show"] = ticks_ms() + 4000
+    if BAT_CUTOFF and 1.0 < bat["v"] < BAT_CUTOFF:       # reveil avec une batterie vide : on repart dormir
+        await go_sleep("Batterie vide")
+    if config.WEB and getattr(config, "WIFI_AT_BOOT", True) and not power.woke_from_sleep():
+        await wifi_on()                                  # (pas de QR apres un reveil de veille : on voit tout de suite les scenes)
     await player()
 
 
